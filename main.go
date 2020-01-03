@@ -3,8 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/gorilla/rpc/v2"
-	"github.com/gorilla/rpc/v2/json2"
+	"github.com/semrush/zenrpc"
 	"github.com/ybbus/jsonrpc"
 	"log"
 	"net/http"
@@ -13,9 +12,9 @@ import (
 )
 
 var (
-	master = flag.String("master", "", "REQUIRED: Address of master server")
+	master   = flag.String("master", "", "REQUIRED: Address of master server")
 	clientID = flag.Int("id", -1, "REQUIRED: Id of client. Must be unique and more than 0")
-	port = flag.Uint("port", 8080, "Port to listen on")
+	port     = flag.Uint("port", 8080, "Port to listen on")
 	username = flag.String("docker-user", "", "REQUIRED: Login on dockerhub for image pulling")
 	password = flag.String("docker-pass", "", "REQUIRED: Password or token on dockerhub for image pulling")
 )
@@ -23,6 +22,8 @@ var (
 type RegisterRequest struct {
 	Id int `json:"id"`
 }
+
+//go:generate zenrpc
 
 func main() {
 	flag.Parse()
@@ -49,9 +50,8 @@ func main() {
 		log.Fatalf("Failed to create service: %+v", err)
 	}
 
-	server := rpc.NewServer()
-	server.RegisterCodec(json2.NewCodec(), "application/json")
-	err = server.RegisterService(service, "Client")
+	server := zenrpc.NewServer(zenrpc.Options{})
+	server.Register("Client", service)
 	if err != nil {
 		log.Fatalln("Failed to register rpc service")
 	}

@@ -22,9 +22,9 @@ const (
 )
 
 type Container struct {
-	id string
-	name string
-	dir string
+	id       string
+	name     string
+	dir      string
 	hostPort int
 }
 
@@ -67,20 +67,20 @@ func NewContainer(ctx context.Context, client docker.Client, id int, image, user
 		NetworkDisabled: false,
 	}
 	hostConfig := container.HostConfig{
-		NetworkMode:     "host",
-		PortBindings:    nat.PortMap{kafkaPort: []nat.PortBinding{
-		{
-			HostIP:   "0.0.0.0",
-			HostPort: strconv.Itoa(hostPort),
-		},
+		NetworkMode: "host",
+		PortBindings: nat.PortMap{kafkaPort: []nat.PortBinding{
+			{
+				HostIP:   "0.0.0.0",
+				HostPort: strconv.Itoa(hostPort),
+			},
 		}},
-		AutoRemove:      false,
-		Mounts:          []mount.Mount{
-		{
-			Type:   mount.TypeBind,
-			Source: containerDir,
-			Target: "/etc/kafka",
-		},
+		AutoRemove: false,
+		Mounts: []mount.Mount{
+			{
+				Type:   mount.TypeBind,
+				Source: containerDir,
+				Target: "/etc/kafka",
+			},
 		},
 	}
 	body, err := client.ContainerCreate(ctx, &config, &hostConfig, nil, containerName)
