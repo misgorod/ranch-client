@@ -1,14 +1,20 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
-	"github.com/semrush/zenrpc"
-	"github.com/ybbus/jsonrpc"
+	"github.com/gorilla/rpc/v2"
+	json "github.com/gorilla/rpc/v2/json2"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
-	ranch "ranch-client/rpc"
+	"os"
+	"os/signal"
+	"ranchclient/ranch"
+	"syscall"
+	"time"
 )
 
 var (
@@ -19,13 +25,38 @@ var (
 	password = flag.String("docker-pass", "", "REQUIRED: Password or token on dockerhub for image pulling")
 )
 
-type RegisterRequest struct {
-	Id int `json:"id"`
+func main() {
+	validateArgs()
+	service, err := ranch.NewService(*master)
+	if err != nil {
+		log.Fatalf("Failed to create service: %+v", err)
+	}
+	err = service.Register(*clientID, *username, *password)
+	if err != nil {
+		log.Fatalf("Failed to register client: %+v", err)
+	}
+
+	rpcServer := rpc.NewServer()
+	rpcServer.RegisterCodec(json.NewCodec(), "application/json")
+	rpcServer.RegisterService(service, "Client")
+
+	listenAddr := fmt.Sprintf(":%d", *port)
+	serveMux := http.DefaultServeMux
+	serveMux.Handle("/rpc", rpcServer)
+	server := &http.Server{
+		Addr:              listenAddr,
+		Handler:           serveMux,
+	}
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGQUIT, syscall.SIGSTOP, syscall.SIGTERM, syscall.SIGINT, syscall.SIGKILL)
+	go gracefulShutdown(quit, server, service)
+
+	log.Printf("Listening on %d\n", *port)
+	log.Fatalln(server.ListenAndServe())
 }
 
-//go:generate zenrpc
-
-func main() {
+func validateArgs() {
 	flag.Parse()
 	if *master == "" || !IsUrl(*master) {
 		log.Fatalf("Invalid master address: %s\n", *master)
@@ -33,33 +64,41 @@ func main() {
 	if *clientID < 1 {
 		log.Fatalf("Invalid client id: %d\n", *clientID)
 	}
-
-	client := jsonrpc.NewClient(*master)
-	_, err := client.Call("Ranch.Register", &RegisterRequest{*clientID})
-	if err != nil {
-		switch e := err.(type) {
-		case *jsonrpc.HTTPError:
-			log.Fatalf("Failed to register client due to HTTP error: code: %d error: %s\n", e.Code, e.Error())
-		default:
-			log.Fatalf("Failed to register client dur to RPC error: %s\n", e.Error())
-		}
+	if *username == "" {
+		log.Fatalln("Username must be provided")
 	}
-
-	service, err := ranch.NewService(*clientID, *username, *password)
-	if err != nil {
-		log.Fatalf("Failed to create service: %+v", err)
+	if *password == "" {
+		log.Fatalln("Password must be provided")
 	}
-
-	server := zenrpc.NewServer(zenrpc.Options{})
-	server.Register("Client", service)
-	if err != nil {
-		log.Fatalln("Failed to register rpc service")
-	}
-	http.Handle("/rpc", server)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *port), nil))
 }
+
 
 func IsUrl(str string) bool {
 	u, err := url.Parse(str)
 	return err == nil && u.Scheme != "" && u.Host != ""
+}
+
+func GetOutboundIP() net.IP {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+
+	return localAddr.IP
+}
+
+func gracefulShutdown(quit <-chan os.Signal, server *http.Server, service *ranch.Service) {
+	<-quit
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	service.Clean(ctx)
+	err := server.Shutdown(ctx)
+	if err != nil {
+		log.Println("Failed to shutdown gracefully due to HTTP server")
+		return
+	}
+	log.Println("Service was shutdown gracefully")
 }

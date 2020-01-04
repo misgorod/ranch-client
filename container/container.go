@@ -9,12 +9,11 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	docker "github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
 	"github.com/phayes/freeport"
 	"github.com/pkg/errors"
 	"io/ioutil"
 	"os"
-	"strconv"
+	"time"
 )
 
 const (
@@ -36,7 +35,11 @@ func (c *Container) Name() string {
 	return c.name
 }
 
-func NewContainer(ctx context.Context, client docker.Client, id int, image, username, password string) (*Container, error) {
+func (c *Container) Dir() string {
+	return c.dir
+}
+
+func NewContainer(ctx context.Context, client *docker.Client, id int, image, confPath, hostDir, username, password string) (*Container, error) {
 	authStr, err := authEncode(username, password)
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to encode auth data")
@@ -46,21 +49,16 @@ func NewContainer(ctx context.Context, client docker.Client, id int, image, user
 		return nil, errors.Wrapf(err, "Failed to pull image %s", image)
 	}
 	containerName := fmt.Sprintf("ranch-%d", id)
-	containerPort, err := nat.NewPort("tcp", kafkaPort)
-	if err != nil {
-		return nil, errors.Wrap(err, "Failed to create port binding")
-	}
+	//containerPort, err := nat.NewPort("tcp", kafkaPort)
+	//if err != nil {
+	//	return nil, errors.Wrap(err, "Failed to create port binding")
+	//}
 	hostPort, err := freeport.GetFreePort()
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to get free port")
 	}
-	containerDir, err := ioutil.TempDir("", strconv.Itoa(id))
-	if err != nil {
-		return nil, errors.Wrap(err, "Failed to create temporary dir for container")
-	}
 	config := container.Config{
-		Hostname:        containerName,
-		ExposedPorts:    nat.PortSet{containerPort: struct{}{}},
+		//ExposedPorts:    nat.PortSet{containerPort: struct{}{}},
 		Tty:             true,
 		Image:           image,
 		Volumes:         nil,
@@ -68,36 +66,35 @@ func NewContainer(ctx context.Context, client docker.Client, id int, image, user
 	}
 	hostConfig := container.HostConfig{
 		NetworkMode: "host",
-		PortBindings: nat.PortMap{kafkaPort: []nat.PortBinding{
-			{
-				HostIP:   "0.0.0.0",
-				HostPort: strconv.Itoa(hostPort),
-			},
-		}},
+		//PortBindings: nat.PortMap{kafkaPort: []nat.PortBinding{
+		//	{
+		//		HostIP:   "0.0.0.0",
+		//		HostPort: strconv.Itoa(hostPort),
+		//	},
+		//}},
 		AutoRemove: false,
 		Mounts: []mount.Mount{
 			{
 				Type:   mount.TypeBind,
-				Source: containerDir,
-				Target: "/etc/kafka",
+				Source: hostDir,
+				Target: confPath,
 			},
 		},
 	}
 	body, err := client.ContainerCreate(ctx, &config, &hostConfig, nil, containerName)
 	if err != nil {
-		_ = os.RemoveAll(containerDir)
 		return nil, errors.Wrapf(err, "Failed to create container %s", containerName)
 	}
 	c := &Container{
 		body.ID,
 		containerName,
-		containerDir,
+		hostDir,
 		hostPort,
 	}
 	return c, nil
 }
 
-func (c *Container) Start(ctx context.Context, client docker.Client) error {
+func (c *Container) Start(ctx context.Context, client *docker.Client) error {
 	err := client.ContainerStart(ctx, c.id, types.ContainerStartOptions{})
 	if err != nil {
 		return errors.Wrap(err, "Failed to start container")
@@ -105,7 +102,7 @@ func (c *Container) Start(ctx context.Context, client docker.Client) error {
 	return nil
 }
 
-func (c *Container) Logs(ctx context.Context, client docker.Client) (string, error) {
+func (c *Container) Logs(ctx context.Context, client *docker.Client) (string, error) {
 	rc, err := client.ContainerLogs(ctx, c.id, types.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
@@ -126,7 +123,24 @@ func (c *Container) Logs(ctx context.Context, client docker.Client) (string, err
 	return string(logs), nil
 }
 
-func (c *Container) Remove(ctx context.Context, client docker.Client) error {
+func (c *Container) Restart(ctx context.Context, client *docker.Client) error {
+	timeout := time.Second * 5
+	err := client.ContainerRestart(ctx, c.id, &timeout)
+	if err != nil {
+		return errors.Wrap(err, "Failed to restart container")
+	}
+	return nil
+}
+
+func (c *Container) Running(ctx context.Context, client *docker.Client) (bool, error) {
+	stat, err := client.ContainerInspect(ctx, c.id)
+	if err != nil {
+		return false, errors.Wrap(err, "Failed to get state of container")
+	}
+	return stat.State.Running, nil
+}
+
+func (c *Container) Remove(ctx context.Context, client *docker.Client) error {
 	err := os.RemoveAll(c.dir)
 	if err != nil {
 		return errors.Wrap(err, "Failed to remove temp container dir")

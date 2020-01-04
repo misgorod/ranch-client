@@ -1,0 +1,4 @@
+./ranchclient --master http://localhost:8081 --docker-user misgorod --docker-pass *** --id 1
+while true; do echo -e "HTTP/1.1 200 OK\n\n{}" | nc -l -p 8081 -q 1; done
+curl -v -H "Accept: application/json" -H "Content-Type: application/json" localhost:8080/rpc --data '{"method":"Client.Create", "params":{"image":"docker.io/misgorod/kafka:5.3", "confPath":"/data"}, "jsonrpc":"2.0", "id":1}'
+curl -v -H "Accept: application/json" -H "Content-Type: application/json" localhost:8080/rpc --data '{"method":"Client.Start", "params":{"config": {"broker.id":"2", "listeners":"PLAINTEXT://localhost:9092", "zookeeper.connect":"localhost:2181"}}, "jsonrpc":"2.0", "id":1}'
